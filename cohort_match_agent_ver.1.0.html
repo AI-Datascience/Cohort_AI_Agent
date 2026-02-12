@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>広告効果最大化とプランニング自動化 仕様書</title>
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --accent-color: #3498db;
+            --success-color: #27ae60;
+            --warning-color: #e67e22;
+            --bg-color: #f4f7f6;
+            --box-bg: #ffffff;
+            --text-color: #333;
+            --border-radius: 8px;
+            --code-bg: #2d2d2d;
+            --code-text: #f8f8f2;
+        }
+
+        body {
+            font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif;
+            line-height: 1.6;
+            color: var(--text-color);
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: var(--box-bg);
+            padding: 40px;
+            border-radius: var(--border-radius);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+
+        h1 {
+            font-size: 24px;
+            color: var(--primary-color);
+            border-bottom: 2px solid var(--accent-color);
+            padding-bottom: 15px;
+            margin-bottom: 30px;
+        }
+
+        h2 {
+            font-size: 20px;
+            color: var(--primary-color);
+            margin-top: 50px;
+            border-left: 5px solid var(--accent-color);
+            padding-left: 15px;
+            background: linear-gradient(to right, #f9f9f9, #fff);
+            padding-top: 5px;
+            padding-bottom: 5px;
+        }
+
+        h3 {
+            font-size: 18px;
+            color: var(--primary-color);
+            margin-top: 35px;
+            border-bottom: 1px dashed #ccc;
+            padding-bottom: 5px;
+        }
+
+        /* 共通コンポーネント */
+        .summary-box { background-color: #e8f4fc; padding: 20px; border-radius: var(--border-radius); border: 1px solid #bce0fd; }
+        .alert-box { background-color: #fff8e1; padding: 15px 20px; border-left: 5px solid var(--warning-color); margin: 20px 0; border-radius: 4px; color: #5d4037; }
+        
+        /* フローチャート */
+        .flow-diagram { display: flex; flex-direction: column; gap: 20px; margin: 30px 0; font-size: 0.9rem; }
+        .flow-row { display: flex; justify-content: space-between; align-items: stretch; gap: 20px; }
+        .flow-col { flex: 1; display: flex; flex-direction: column; align-items: center; background: #fdfdfd; padding: 15px; border: 1px dashed #ccc; border-radius: var(--border-radius); }
+        .step { background: var(--primary-color); color: #fff; padding: 8px 12px; border-radius: 4px; margin: 5px 0; width: 90%; text-align: center; font-size: 0.85rem; }
+        .step.process { background: #7f8c8d; }
+        .step.data { background: #27ae60; }
+        .arrow-down { font-size: 20px; color: #ccc; margin: 2px 0; text-align: center; }
+        .merge-block { background: #ffeaa7; border: 1px solid #fdcb6e; color: #d35400; padding: 15px; text-align: center; border-radius: var(--border-radius); font-weight: bold; }
+        .result-branches { display: flex; gap: 20px; }
+        .result-box { flex: 1; background: #ecf0f1; padding: 15px; border-radius: var(--border-radius); text-align: center; font-size: 0.9rem; }
+
+        /* アウトプットイメージ */
+        .output-preview { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin: 20px 0; }
+        .group-card { border: 1px solid #ddd; border-radius: var(--border-radius); padding: 20px; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        .group-card h4 { margin-top: 0; color: var(--accent-color); border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .tag-list { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0; }
+        .tag { font-size: 0.75rem; padding: 2px 8px; border-radius: 12px; }
+        .tag-place { background: #e1f5fe; color: #0288d1; }
+        .tag-trait { background: #e8f5e9; color: #2e7d32; }
+        .scenario-box { background: #fdf2f2; padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-top: 10px; border-left: 3px solid #e74c3c; }
+
+        /* テーブル */
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #fff; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background: #f8f9fa; color: var(--primary-color); }
+        .prompt-key { font-weight: bold; width: 30%; color: var(--accent-color); }
+
+        /* プロンプト表示エリア */
+        .prompt-container {
+            background-color: var(--code-bg);
+            color: var(--code-text);
+            padding: 20px;
+            border-radius: var(--border-radius);
+            font-family: "Menlo", "Consolas", "Monaco", monospace;
+            font-size: 0.85rem;
+            white-space: pre-wrap;
+            position: relative;
+            margin-top: 20px;
+            border: 1px solid #444;
+        }
+        .prompt-label {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: var(--accent-color);
+            color: white;
+            padding: 2px 10px;
+            font-size: 0.7rem;
+            border-top-right-radius: var(--border-radius);
+            border-bottom-left-radius: var(--border-radius);
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>行動特徴ベクトル-サービス特徴ベクトルの<br>COS類似度計算による広告効果の最大化とプランニングの自動化</h1>
+
+        <section>
+            <h2>1. エグゼクティブサマリ</h2>
+            <div class="summary-box">
+                <p>本ドキュメントは、Webコンテンツ（ランディングページ）と物理的接触履歴から、その商品・サービス特性に合致するADIDを抽出する手法について記述する。<br>
+                行動データとサービスデータをベクトル化してマッチングさせることで、効果的な広告プランニングの自動生成と、広告効果の最大化を狙いとする。</p>
+            </div>
+        </section>
+
+        <section>
+            <h2>2. 概要：システム処理フロー</h2>
+            <div class="flow-diagram">
+                <div class="flow-row">
+                    <div class="flow-col">
+                        <strong>商品・サービス軸</strong>
+                        <div class="step">URL入力</div>
+                        <div class="arrow-down">↓</div>
+                        <div class="step process">Webコンテンツ取得</div>
+                        <div class="arrow-down">↓</div>
+                        <div class="step process">LLM解析</div>
+                        <div class="arrow-down">↓</div>
+                        <div class="step data">サービス特徴ベクトル</div>
+                    </div>
+                    <div class="flow-col">
+                        <strong>ユーザー行動軸</strong>
+                        <div class="step">ADIDログ (場所/頻度)</div>
+                        <div class="arrow-down">↓</div>
+                        <div class="step process">場所の意味ベクトル化</div>
+                        <div class="arrow-down">↓</div>
+                        <div class="step data">行動特徴ベクトル</div>
+                    </div>
+                </div>
+                <div class="arrow-down">× 掛け合わせ（COS類似度算出）</div>
+                <div class="merge-block">形状近似度（類似度）算出 ⇒ 「商品行動ベクトル」の生成</div>
+                <div class="arrow-down">↓ 分岐</div>
+                <div class="result-branches">
+                    <div class="result-box">
+                        <strong>リスト出力</strong><br>
+                        <span style="font-size:0.8em; color:#999;">(※実装済み)</span>
+                    </div>
+                    <div class="result-box" style="border: 2px solid #3498db; background: #fff;">
+                        <strong>プランニング生成</strong><br>
+                        <span style="font-size:0.8em; color:#3498db;">(※今回の定義範囲)</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>3. プランニング生成の詳細設計</h2>
+            
+            <h3>基本方針：リアルタイムLLM生成</h3>
+            <div class="alert-box">
+                <strong>⚠️ アーキテクチャ上の決定：</strong><br>
+                リアルタイム性を確保するため、このフェーズにおいては<strong>「類似度計算によるベクトル検索」を禁止</strong>とする。<br>
+                代わりに、抽出済みの関連情報を用いた<strong>1回のやり取り（シングルターン）</strong>のみで実現する。
+            </div>
+
+            <h3>入力データ構成 (Input Data)</h3>
+            <p>シングルターンで精度を出すため、以下の情報をプロンプトに構造化して注入する。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>項目</th>
+                        <th>具体的なデータ内容</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td class="prompt-key">LPスクレイピング情報</td>
+                        <td>
+                            ・商品名/サービス名<br>
+                            ・解決したい課題（Pain Points）<br>
+                            ・主要な機能/ベネフィット<br>
+                            ・想定ターゲット像
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="prompt-key">高関連場所・施設リスト</td>
+                        <td>
+                            ・商品特徴ベクトルとCOS類似度が高い場所（TOP N件）<br>
+                            ・施設のカテゴリ名、エリア特性、利用者の文脈<br>
+                            例：「都心部コワーキングスペース」「地方キャンプ場」
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section>
+            <h2>4. 理想的なアウトプット (Ideal Output)</h2>
+            <p>生成される広告プランニングは、以下のような「ペルソナグループ別カード」形式を正とする。</p>
+            
+            <div class="output-preview">
+                <div class="group-card">
+                    <h4>ターゲットグループ A</h4>
+                    <strong>📍 よく向かう場所</strong>
+                    <div class="tag-list">
+                        <span class="tag tag-place">丸の内オフィス街</span>
+                        <span class="tag tag-place">高級ジム</span>
+                    </div>
+                    <strong>👤 特徴・属性</strong>
+                    <div class="tag-list">
+                        <span class="tag tag-trait">高所得層</span>
+                        <span class="tag tag-trait">効率重視</span>
+                    </div>
+                    <div class="scenario-box">
+                        <strong>訴求シナリオ:</strong><br>
+                        「忙しいビジネスマンへ、移動の合間にできる自己研鑽」を軸に、スマートなライフスタイルを提案。
+                    </div>
+                </div>
+
+                <div class="group-card">
+                    <h4>ターゲットグループ B</h4>
+                    <strong>📍 よく向かう場所</strong>
+                    <div class="tag-list">
+                        <span class="tag tag-place">代々木公園</span>
+                        <span class="tag tag-place">オーガニックカフェ</span>
+                    </div>
+                    <strong>👤 特徴・属性</strong>
+                    <div class="tag-list">
+                        <span class="tag tag-trait">ファミリー</span>
+                        <span class="tag tag-trait">体験重視</span>
+                    </div>
+                    <div class="scenario-box">
+                        <strong>訴求シナリオ:</strong><br>
+                        「家族との時間をより豊かに」をテーマに、休日の心地よさを高めるアイテムとして商品を位置づける。
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>5. 実装：システムプロンプトドラフト</h2>
+            <p>上記のインプットからアウトプットを生成するための、LLMへの命令文（System Prompt）定義。</p>
+
+            <div class="prompt-container"><span class="prompt-label">System Prompt Draft</span>
+# Role
+あなたはマーケティングデータアナリスト兼、優秀な広告プランナーです。
+「商品の特徴」と、その商品と親和性の高い人々が訪れる「場所のデータ」から、具体的なターゲットペルソナと訴求シナリオを作成してください。
+
+# Constraints
+- リアルタイム処理のため、思考プロセスは簡潔に行うこと。
+- 出力は必ず指定されたJSONフォーマットに従うこと。
+- 抽象的な表現は避け、「なぜその場所に行く人がターゲットなのか」の文脈を重視すること。
+
+# Input Data
+## 1. Product Info (LP Content)
+{lp_scraping_content}
+
+## 2. Related Places (High COS Similarity)
+{related_places_list}
+
+# Steps
+1. **Analyze Product:** LP情報から、商品のコアバリューと基本的なターゲット属性を特定する。
+2. **Analyze Places:** 提供された場所リストに共通する文脈（Context）や、そこを訪れる人のライフスタイルを推測する。
+3. **Cluster & Match:** 場所の傾向に基づいてターゲットを3つの異なるグループに分類する。
+   - 例: 「ビジネスエリア」が多いならビジネス層、「公園/カフェ」が多いならファミリー・主婦層など。
+4. **Scenario Generation:** 各グループに対し、その場所の文脈を活かした商品訴求シナリオを作成する。
+
+# Output Format (JSON)
+{
+  "planning_groups": [
+    {
+      "group_name": "キャッチーなグループ名",
+      "related_places": ["場所A", "場所B", "場所C"],
+      "traits": ["属性タグ1", "属性タグ2", "属性タグ3"],
+      "scenario": "ターゲットに対する具体的な訴求文章（100文字程度）"
+    },
+    ...
+  ]
+}
+            </div>
+        </section>
+
+    </div>
+</body>
+</html>
