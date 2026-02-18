@@ -3,6 +3,7 @@
 # azure-monitor-opentelemetry
 
 azure-identity
+# azure-identity-broker
 azure-core
 azure-functions
 azure-ai-inference
