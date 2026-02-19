@@ -1,6 +1,9 @@
 import os
+import asyncio
 from logging import getLogger
 import azure.functions as func
+
+from url_scraper import fetch_web
 
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
@@ -17,15 +20,15 @@ def LPInsightGenerator(req: func.HttpRequest) -> func.HttpResponse:
         AI_FOUNDRY_MODEL          = os.environ.get("AI_FOUNDRY_MODEL")
         AI_FOUNDRY_VERSION        = os.environ.get("AI_FOUNDRY_VERSION")
         DYNAMICSESSIONS_ENDPOINT  = os.environ.get("DYNAMICSESSIONS_ENDPOINT")
-        MONGODB_CONNECTION_STRING = os.environ.get("MONGODB_CONNECTION_STRING")
-        DB_NAME                   = os.environ.get("DB_NAME")
-        COLLECTION_NAME           = os.environ.get("COLLECTION_NAME")
 
         # リクエストをパースする
-        req_body = req.get_json()
-        user_id  = req_body.get('user_id',  None)
-        chat_id  = req_body.get('chat_id',  None)
-        user_msg = req_body.get('user_msg', None)
+        req_body  = req.get_json()
+        user_id   = req_body.get('user_id', None)
+        lp_url    = req_body.get('lp_url',  None)
+
+        task_list = []
+        task_list.append(fetch_web(logger, asyncio.Semaphore(10), lp_url))
+        
 
         return func.HttpResponse(f"Success", status_code=200)
 
