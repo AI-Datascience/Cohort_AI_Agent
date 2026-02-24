@@ -9,3 +9,4 @@ azure-functions
 azure-ai-inference
 langchain-azure-dynamic-sessions
 openai
+aiohttp

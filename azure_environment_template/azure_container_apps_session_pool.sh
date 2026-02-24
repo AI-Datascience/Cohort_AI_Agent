@@ -14,9 +14,10 @@ RG_NAME="project_aiagent_c9x347ide0cgk3w5"          # 既存のリソースグ�
 LOCATION="japaneast"                                # リージョン (例: eastasia, japaneast)
 ENV_NAME="custom-interpreter-env"                   # Container Apps 環境の名前
 POOL_NAME="custom-interpreter-pool"                 # セッションプールの名前
+POOL_NAME2="managed-interpreter-pool"               # セッションプールの名前
 
 # コンテナ設定
-IMAGE_NAME="ghcr.io/leggings8942/self-piston:v1.2"  # Dockerイメージの場所
+IMAGE_NAME="ghcr.io/leggings8942/self-piston:v1.3"  # Dockerイメージの場所
 TARGET_PORT=8000                                    # Listenポート
 
 # レジストリ認証 (ghcr.io用)
@@ -30,6 +31,7 @@ TARGET_PORT=8000                                    # Listenポート
 # ---------------------------------------------------------
 # 拡張機能の追加・更新
 az extension add --name containerapp --upgrade --yes
+az extension add --name containerapp --upgrade --allow-preview true --yes
 
 # リソースプロバイダーの登録 (初回のみ必要、念のため実行)
 az provider register --namespace Microsoft.App
@@ -64,6 +66,19 @@ az containerapp sessionpool create    \
   --cpu               2.0             \
   --memory            4.0Gi
 
+# セッションプールの作成
+az containerapp sessionpool create    \
+  --name              $POOL_NAME2     \
+  --resource-group    $RG_NAME        \
+  --location          $LOCATION       \
+  --container-type    PythonLTS       \
+  --max-sessions      30              \
+  --ready-sessions    0               \
+  --cooldown-period   300             \
+  --network-status    EgressEnabled   \
+  --cpu               2.0             \
+  --memory            4.0Gi
+
 
 # 管理エンドポイントを表示
 az containerapp sessionpool show                       \
@@ -71,4 +86,11 @@ az containerapp sessionpool show                       \
   --resource-group $RG_NAME                            \
   --query          "properties.poolManagementEndpoint" \
   --output         tsv
+
+
+# セッションプールの更新
+az containerapp sessionpool update \
+    --name           $POOL_NAME    \
+    --resource-group $RG_NAME      \
+    --image          $IMAGE_NAME
 
