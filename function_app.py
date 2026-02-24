@@ -19,13 +19,17 @@ from code_interpreter import CodeInterpreter
 load_dotenv()
 
 # 環境変数の取得
-AI_FOUNDRY_ENDPOINT      = os.environ.get("AI_FOUNDRY_ENDPOINT")
-AI_FOUNDRY_API_KEY       = os.environ.get("AI_FOUNDRY_API_KEY")
-AI_FOUNDRY_MODEL         = os.environ.get("AI_FOUNDRY_MODEL")
-DYNAMICSESSIONS_ENDPOINT = os.environ.get("DYNAMICSESSIONS_ENDPOINT")
-LLM_MAX_TOKENS           = os.environ.get("LLM_MAX_TOKENS")
-LLM_TEMPERATURE          = os.environ.get("LLM_TEMPERATURE")
-LLM_TOP_P                = os.environ.get("LLM_TOP_P")
+AI_FOUNDRY_ENDPOINT       = os.environ.get("AI_FOUNDRY_ENDPOINT")
+AI_FOUNDRY_API_KEY        = os.environ.get("AI_FOUNDRY_API_KEY")
+AI_FOUNDRY_MODEL          = os.environ.get("AI_FOUNDRY_MODEL")
+DYNAMICSESSIONS_ENDPOINT  = os.environ.get("DYNAMICSESSIONS_ENDPOINT")
+STORAGE_CONNECTION_STRING = os.environ.get("STORAGE_CONNECTION_STRING")
+STORAGE_CONTAINER_NAME    = os.environ.get("STORAGE_CONTAINER_NAME")
+COHORT_NPZ_SAS_URL        = os.environ.get("COHORT_NPZ_SAS_URL")
+LLM_MAX_TOKENS            = os.environ.get("LLM_MAX_TOKENS")
+LLM_TEMPERATURE           = os.environ.get("LLM_TEMPERATURE")
+LLM_TOP_P                 = os.environ.get("LLM_TOP_P")
+MAX_ADID_NUMBER           = os.environ.get("MAX_ADID_NUMBER")
 
 # メモ：
 # ユーザーからの要求ごとにhttpxクライアントを作成すると「SNATポート枯渇」が発生する
@@ -132,9 +136,23 @@ async def get_analysis_data(lp_url:str):
     analysis_data = await llmClient.complete(get_llm_prompt(lp_dict))
     return analysis_data
 
+async def execute_session_pool_setup(user_id:str, session_id:str):
+    # 必須ライブラリのインストール
+    python_code = """
+%pip install                                                                      \
+        numpy sentencepiece protobuf azure-storage-blob                           \
+        readability-lxml==0.8.4.1    w3lib==2.4.0                httpx==0.28.1    \
+        beautifulsoup4==4.14.3       azure-ai-inference==1.0.0b9                  \
+        python-dotenv==1.2.1         openai==2.16.0              polars==1.38.1   \
+        sentence-transformers==5.2.2 tiktoken==0.12.0            fastembed==0.7.4
+"""
+    # 必須ライブラリのインストール
+    result = await poolClient.execute_dynamic_session(user_id, session_id, python_code, timeout=600)
+    return result
+
 async def execute_load_cohort(user_id:str, session_id:str):
     # 必要なファイルの読み込みプログラムを設定
-    python_code = """
+    python_code = f"""
 import io
 import asyncio
 import httpx
@@ -142,7 +160,7 @@ import numpy as np
 import scipy as sp
 
 # Storage AccountのSAS URL
-target_sas_url   = "{COHORT_SAS_URL}"
+target_sas_url   = "{COHORT_NPZ_SAS_URL}"
 
 # 対象ファイルの読み込み
 limits  = httpx.Limits(max_keepalive_connections=3, max_connections=10)
@@ -156,12 +174,29 @@ response.raise_for_status()
 # cohort.npz のnumpyへの展開
 def extract_cohort_npz(target_bytes):
     npz         = np.load(io.BytesIO(target_bytes), allow_pickle=True)
-    np_cohort   = sp.sparse.csr_matrix((npz["data"], npz["indices"], npz["indptr"]), shape=tuple(npz["shape"]))
-    np_adidlist = npz["adid_list"]
-    np_codelist = npz["business_codelist"]
-    return np_cohort, np_adidlist, np_codelist
+    return npz
 
-np_cohort, np_adidlist, np_codelist = await asyncio.to_thread(extract_cohort_npz, response.content)
+async def get_cohort(task_npz):
+    npz         = await task_npz
+    np_cohort   = sp.sparse.csr_matrix((npz["data"], npz["indices"], npz["indptr"]), shape=tuple(npz["shape"]))
+    return np_cohort
+
+async def get_adidlist(task_npz):
+    npz         = await task_npz
+    np_adidlist = npz["adid_list"]
+    return np_adidlist
+
+async def get_codelist(task_npz):
+    npz         = await task_npz
+    np_codelist = npz["business_codelist"]
+    return np_codelist
+
+# パフォーマンスのため、平行処理の途中で処理を完了させる
+npz_cohort  = asyncio.create_task(asyncio.to_thread(extract_cohort_npz, response.content))
+np_cohort   = asyncio.create_task(get_cohort(npz_cohort))
+np_adidlist = asyncio.create_task(get_adidlist(npz_cohort))
+np_codelist = asyncio.create_task(get_codelist(npz_cohort))
+
 print("Successfully retrieved and extracted cohort file.")
 """
     # 計算用準備物の読み込み
@@ -170,70 +205,51 @@ print("Successfully retrieved and extracted cohort file.")
 
 async def execute_load_caption(user_id:str, session_id:str):
     # 必要なファイルの読み込みプログラムを設定
-    python_code = """
+    python_code = f"""
 import io
 import asyncio
 import httpx
 import numpy as np
-import scipy as sp
+from azure.storage.blob.aio import BlobServiceClient
 
-# Storage AccountのSAS URL
-target_sas_url   = "{CAPTION_SAS_URL}"
+# 環境変数の設定
+STORAGE_CONNECTION_STRING = "{STORAGE_CONNECTION_STRING}"
+STORAGE_CONTAINER_NAME    = "{STORAGE_CONTAINER_NAME}"
+STORAGE_BLOB_PATH         = "cohort_caption_matrix.npz"
 
 # 対象ファイルの読み込み
-limits  = httpx.Limits(max_keepalive_connections=3, max_connections=10)
-timeout = httpx.Timeout(600.0, connect=5.0)
-async with httpx.AsyncClient(limits=limits, timeout=timeout) as client:
-    response = await client.get(target_sas_url)
-
-# ステータスコードチェック
-response.raise_for_status()
+blob_service_client = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+async with blob_service_client:
+    blob_client = blob_service_client.get_blob_client(container=STORAGE_CONTAINER_NAME, blob=STORAGE_BLOB_PATH)
+    stream      = await blob_client.download_blob()
+    file_bytes  = await stream.readall()
 
 # cohort_caption_matrix.npz のnumpyへの展開
 def extract_caption_npz(target_bytes):
     npz              = np.load(io.BytesIO(target_bytes), allow_pickle=True)
+    return npz
+
+async def get_spots_matrix(task_npz):
+    npz              = await task_npz
     spots_matrix     = npz["data"]
+    return spots_matrix
+
+async def get_relational_spots(task_npz):
+    npz              = await task_npz
     relational_spots = npz["business_placelist"]
+    return relational_spots
+
+async def get_dict_code2name(task_npz):
+    npz              = await task_npz
     dict_code2name   = npz["dict_code2name"].item()
-    return spots_matrix, relational_spots, dict_code2name
+    return dict_code2name
 
-spots_matrix, relational_spots, dict_code2name = await asyncio.to_thread(extract_caption_npz, response.content)
-print("Successfully retrieved and extracted caption file.")
-"""
-    # 計算用準備物の読み込み
-    result = await poolClient.execute_dynamic_session(user_id, session_id, python_code, timeout=600)
-    return result
+# パフォーマンスのため、平行処理の途中で処理を完了させる
+npz_caption      = asyncio.create_task(asyncio.to_thread(extract_caption_npz, file_bytes))
+spots_matrix     = asyncio.create_task(get_spots_matrix(npz_caption))
+relational_spots = asyncio.create_task(get_relational_spots(npz_caption))
+dict_code2name   = asyncio.create_task(get_dict_code2name(npz_caption))
 
-async def execute_load_caption(user_id:str, session_id:str):
-    # 必要なファイルの読み込みプログラムを設定
-    python_code = """
-import io
-import asyncio
-import httpx
-import numpy as np
-import scipy as sp
-
-# Storage AccountのSAS URL
-target_sas_url   = "{CAPTION_SAS_URL}"
-
-# 対象ファイルの読み込み
-limits  = httpx.Limits(max_keepalive_connections=3, max_connections=10)
-timeout = httpx.Timeout(600.0, connect=5.0)
-async with httpx.AsyncClient(limits=limits, timeout=timeout) as client:
-    response = await client.get(target_sas_url)
-
-# ステータスコードチェック
-response.raise_for_status()
-
-# cohort_caption_matrix.npz のnumpyへの展開
-def extract_caption_npz(target_bytes):
-    npz              = np.load(io.BytesIO(target_bytes), allow_pickle=True)
-    spots_matrix     = npz["data"]
-    relational_spots = npz["business_placelist"]
-    dict_code2name   = npz["dict_code2name"].item()
-    return spots_matrix, relational_spots, dict_code2name
-
-spots_matrix, relational_spots, dict_code2name = await asyncio.to_thread(extract_caption_npz, response.content)
 print("Successfully retrieved and extracted caption file.")
 """
     # 計算用準備物の読み込み
@@ -246,7 +262,7 @@ async def execute_generate_embeddings(user_id:str, session_id:str, gene_scene:Li
     lp_keywords      = [key for key, val in items_positive] + [ key for key, val in items_negative]
 
     # 商品シーンを埋め込みベクトルへ変換するプログラムを設定
-    python_code = """
+    python_code = f"""
 import asyncio
 from sentence_transformers import SentenceTransformer
 
@@ -256,10 +272,12 @@ def convert_scene2embed():
     lp_matrix = model.encode({lp_keywords}, normalize_embeddings=True)  # キーワード数M × 512
     return lp_matrix
 
-lp_matrix = await asyncio.to_thread(convert_scene2embed)
+# パフォーマンスのため、平行処理の途中で処理を完了させる
+lp_matrix = asyncio.create_task(asyncio.to_thread(convert_scene2embed))
+
 print("Successfully convert scene to embedding vector.")
 """
-    # 商品シーン → 埋め込みベクトル
+    # 商品シーン to 埋め込みベクトル
     result = await poolClient.execute_dynamic_session(user_id, session_id, python_code, timeout=600)
     return result
 
@@ -273,79 +291,120 @@ async def execute_calculate_correlation(user_id:str, session_id:str, gene_scene:
     lp_vector        = lp_weights.reshape(1, -1)            # 1 × キーワード数M
 
     # WEBデータ埋め込みベクトルとキャプション行列から相関ベクトルを計算するプログラムを設定
-    python_code = """
+    python_code = f"""
 import asyncio
+import numpy as np
 
 # WEBデータ埋め込みベクトルとキャプション行列から相関ベクトルを計算
-def calculate_correlation():
-    lp_vector      = {lp_vector}
-    lp_matrix      = await lp_matrix
-    spots_matrix   = await spots_matrix
-    lp_coefficient = lp_vector @ lp_matrix @ spots_matrix.T  # LPのスポット係数
+async def calculate_correlation():
+    lp_vector          = {lp_vector}
+    tmp_lp_matrix      = await lp_matrix
+    tmp_spots_matrix   = await spots_matrix
+
+    # await非対応な処理部分のラッパー
+    def _tmp_calc(vec_lp, mat_lp, mat_spots):
+        return vec_lp @ mat_lp @ mat_spots.T
+
+    # LPのスポット係数を算出
+    lp_coefficient     = await asyncio.to_thread(_tmp_calc, lp_vector, tmp_lp_matrix, tmp_spots_matrix)
     return lp_coefficient
 
-lp_coefficient = await asyncio.to_thread(calculate_correlation)
+# パフォーマンスのため、平行処理の途中で処理を完了させる
+lp_coefficient = asyncio.create_task(calculate_correlation())
+
 print("Successfully calculate correlation vector.")
 """
     # 商品シーン → 埋め込みベクトル
     result = await poolClient.execute_dynamic_session(user_id, session_id, python_code, timeout=600)
     return result
 
-async def execute_calculate_score(user_id:str, session_id:str, gene_scene:List|Dict):
-    items_positive   = list(gene_scene['positive'].items())
-    items_negative   = list(gene_scene['negative'].items())
-    lp_weights       = [val for key, val in items_positive] + [-val for key, val in items_negative]
+async def execute_calculate_score(user_id:str, session_id:str):
+    # 相関ベクトルとコホート行列からADID毎のスコアを算出するプログラムを設定
+    python_code = f"""
+import asyncio
+import numpy as np
 
-    total_weight     = np.sum(np.abs(lp_weights))
-    lp_weights       = np.array(lp_weights) / total_weight
-    lp_vector        = lp_weights.reshape(1, -1)            # 1 × キーワード数M
+# 相関ベクトルとコホート行列からADID毎のスコアを算出
+async def calculate_score():
+    MAX_RECORDS          = {MAX_ADID_NUMBER}
+    tmp_lp_coefficient   = await lp_coefficient
+    tmp_np_cohort        = await np_cohort
 
-    # WEBデータ埋め込みベクトルとキャプション行列から相関ベクトルを計算するプログラムを設定
-    python_code = """
-MAX_RECORDS      = 10000
-CORRECT_MEAN     = np.mean(lp_coefficient)
-CORRECT_STDDEV   = np.std( lp_coefficient)
+    # await非対応な処理部分のラッパー
+    def _tmp_calc(mat_cohort, vec_lp):
+        np_scored = (mat_cohort @ vec_lp).flatten()
+        indices   = np.argsort(np_scored)[::-1][:MAX_RECORDS]
+        return np_scored, indices
 
-# ADID毎のスコアを算出
-np_scored        = (np_cohort @ lp_coefficient.T).flatten()
-indices          = np.argsort(np_scored)[::-1][:MAX_RECORDS]
-sorted_adidlist  = np_adidlist[indices]
-sorted_spots     = relational_spots
-sorted_targets   = np_cohort[indices, :]
-sorted_scored    = np_scored[indices]
+    # ADID毎のスコアを算出
+    np_scored, indices = await asyncio.to_thread(_tmp_calc, tmp_np_cohort, tmp_lp_coefficient.T)
+    return np_scored, indices
+
+async def get_sorted_adidlist(task_adid_score):
+    np_scored, indices = await task_adid_score
+    tmp_np_adidlist    = await np_adidlist
+    sorted_adidlist    = tmp_np_adidlist[indices]
+    return sorted_adidlist
+
+async def get_sorted_spots(task_adid_score):
+    return relational_spots
+
+async def get_sorted_targets(task_adid_score):
+    np_scored, indices = await task_adid_score
+    tmp_np_cohort      = await np_cohort
+    sorted_targets     = tmp_np_cohort[indices, :]
+    return sorted_targets
+
+async def get_sorted_scored(task_adid_score):
+    np_scored, indices = await task_adid_score
+    sorted_scored      = np_scored[indices]
+    return sorted_scored
+
+# パフォーマンスのため、平行処理の途中で処理を完了させる
+adid_score       = asyncio.create_task(calculate_score())
+sorted_adidlist  = asyncio.create_task(get_sorted_adidlist(adid_score))
+sorted_spots     = asyncio.create_task(get_sorted_spots(adid_score))
+sorted_targets   = asyncio.create_task(get_sorted_targets(adid_score))
+sorted_scored    = asyncio.create_task(get_sorted_scored(adid_score))
+
+print("Successfully calculate adid score.")
+"""
+    # 相関ベクトルとコホート行列からADID毎のスコアを算出
+    result = await poolClient.execute_dynamic_session(user_id, session_id, python_code, timeout=600)
+    return result
+
+async def execute_store_dataframe(user_id:str, session_id:str):
+    # メモ：
+    # これまでパフォーマンス向上のため、平行処理の途中で処理を完了させてきた
+    # しかし、ここでは主にデータの整形・保存が主目的となっている
+    # そのためこのブロックでは、平行処理を全て受け止めて処理の完了を保証していることに注意すること
+
+    # 理由となるスポットの抽出・データ整形を行うプログラムを設定
+    python_code = f"""
+import io
+import asyncio
+import numpy  as np
+import polars as pl
+from azure.storage.blob.aio import BlobServiceClient
+
+# 環境変数の設定
+STORAGE_CONNECTION_STRING = "{STORAGE_CONNECTION_STRING}"
+STORAGE_CONTAINER_NAME    = "{STORAGE_CONTAINER_NAME}"
+STORE_BLOB_PATH           = "calc/result_reasons.parquet"
 
 # 閾値以上のスポットを理由とする
 REASON_THRESHOLD = 0.03
-np_threshold     = lp_coefficient > REASON_THRESHOLD
-np_reasons       = sorted_targets.multiply(np_threshold)
+
+# 平行タスクを作らずに受け止める
+np_threshold     = (await lp_coefficient) > REASON_THRESHOLD
+np_reasons       = (await sorted_targets).multiply(np_threshold)
 np_reasons.eliminate_zeros()
-
-lp_coefficient = await asyncio.to_thread(calculate_correlation)
-print("Successfully calculate correlation vector.")
-"""
-    # 商品シーン → 埋め込みベクトル
-    result = await poolClient.execute_dynamic_session(user_id, session_id, python_code, timeout=600)
-    return result
-
-async def execute_store_dataframe(user_id:str, session_id:str, gene_scene:List|Dict):
-    items_positive   = list(gene_scene['positive'].items())
-    items_negative   = list(gene_scene['negative'].items())
-    lp_weights       = [val for key, val in items_positive] + [-val for key, val in items_negative]
-
-    total_weight     = np.sum(np.abs(lp_weights))
-    lp_weights       = np.array(lp_weights) / total_weight
-    lp_vector        = lp_weights.reshape(1, -1)            # 1 × キーワード数M
-
-    # WEBデータ埋め込みベクトルとキャプション行列から相関ベクトルを計算するプログラムを設定
-    python_code = """
-import asyncio
-
-pldf_reasons     = pl.DataFrame({
-    						'ADID'           : sorted_adidlist[np_reasons.row], 
-                            'cohort_caption' : sorted_spots[np_reasons.col], 
-                            'score'          : sorted_scored[np_reasons.row], 
+pldf_reasons     = pl.DataFrame({{
+    						'ADID'           : (await sorted_adidlist)[np_reasons.row], 
+                            'cohort_caption' : (await sorted_spots)[np_reasons.col], 
+                            'score'          : (await sorted_scored)[np_reasons.row], 
                             'value'          : np_reasons.data
-                        })\
+                        }})\
 						.filter(pl.col('value') > 0)\
                         .group_by(pl.col('ADID'), maintain_order=True)\
                         .agg(
@@ -354,9 +413,19 @@ pldf_reasons     = pl.DataFrame({
                         )\
                         .select(['ADID', 'score', 'reasons'])
 
-print("Successfully calculate correlation vector.")
+# 一時バッファに計算結果を流し込む
+tmp_buffer = io.BytesIO()
+pldf_reasons.write_parquet(tmp_buffer)
+tmp_buffer.seek(0)
+
+blob_service_client = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+async with blob_service_client:
+    blob_client = blob_service_client.get_blob_client(container=STORAGE_CONTAINER_NAME, blob=STORE_BLOB_PATH)
+    await blob_client.upload_blob(tmp_buffer.read(), overwrite=True)
+
+print("Successfully store polars dataframe.")
 """
-    # 商品シーン → 埋め込みベクトル
+    # 理由となるスポットの抽出・データ整形
     result = await poolClient.execute_dynamic_session(user_id, session_id, python_code, timeout=600)
     return result
 
@@ -376,9 +445,11 @@ async def LPInsightGenerator(req: func.HttpRequest) -> func.HttpResponse:
 
 
         # LPのWEBデータをもとに商品シーンを生成
-        task_gene_scene   = asyncio.create_task(get_analysis_data(logger, lp_url))
+        task_gene_scene   = asyncio.create_task(get_analysis_data(lp_url))
+        # 依存ライブラリのインストール
+        await execute_session_pool_setup( user_id, 'defaultsession')
         # 計算用準備物の読み込み
-        task_load_cohort  = asyncio.create_task(execute_load_cohort( user_id, 'defaultsession'))
+        # task_load_cohort  = asyncio.create_task(execute_load_cohort( user_id, 'defaultsession'))
         # 計算用準備物の読み込み
         task_load_caption = asyncio.create_task(execute_load_caption(user_id, 'defaultsession'))
 

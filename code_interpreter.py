@@ -28,7 +28,7 @@ class CodeInterpreter:
 
         # URLの構築
         # Azure Session Pool は以下の形式でリクエストをコンテナに転送する
-        # {管理エンドポイント}/{コンテナ内のパス}?identifier={USER_ID}
+        # {管理エンドポイント}/{コンテナ内のパス}?identifier={USER_ID}&api-version=2024-02-02-preview
         # SelfPistonコンテナは /code/execute で待ち受けている
         target_url = f"{self.endpoint}/code/execute"
         headers    = {
@@ -50,6 +50,6 @@ class CodeInterpreter:
 
         response = await self.http_client.post(target_url, headers=headers, params=params, json=payload)
         response.raise_for_status() # HTTP 4xx, 5xx エラーなら例外を発生させる
-        return response.text
+        return response.json()
 
 
