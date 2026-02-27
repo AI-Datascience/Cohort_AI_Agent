@@ -34,10 +34,7 @@ class LlmAgent:
     async def complete(self, prompts:List):
         response = await self.llm.chat.completions.create(
                                 model=self.model_name,
-                                messages=prompts,
-                                max_tokens=self.max_tokens,
-                                temperature=self.temperature,
-                                top_p=self.top_p
+                                messages=prompts
                             )
         
         reply_content = response.choices[0].message.content
