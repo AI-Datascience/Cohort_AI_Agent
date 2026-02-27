@@ -42,7 +42,7 @@ MAX_ADID_NUMBER           = os.environ.get("MAX_ADID_NUMBER")
 # 関数アプリ全体としてこのクライアントを利用することで、SNATポートの枯渇を防ぐ
 # また同時接続数やタイムアウトを明示的に設定することで、相手サーバーやAzureリソースのパンクを防ぐ
 # 
-limits      = httpx.Limits(max_keepalive_connections=20, max_connections=100)
+limits      = httpx.Limits(max_keepalive_connections=20, max_connections=300)
 timeout     = httpx.Timeout(300.0, connect=5.0)
 http_client = httpx.AsyncClient(limits=limits, timeout=timeout)
 
@@ -179,8 +179,8 @@ import scipy as sp
 target_sas_url = "{COHORT_NPZ_SAS_URL}"
 
 # httpxの基本設定
-limits  = httpx.Limits(max_keepalive_connections=3, max_connections=10)
-timeout = httpx.Timeout(600.0, connect=5.0)
+limits  = httpx.Limits(max_keepalive_connections=30, max_connections=100)
+timeout = httpx.Timeout(600.0, connect=30.0)
 
 # cohort.npz の numpy への読み込み・展開
 async def extract_cohort_npz():
@@ -227,6 +227,17 @@ print("Successfully retrieved and extracted cohort file.")
 """
     # 計算用準備物の読み込み
     result = await poolClient.execute_dynamic_session(user_id, session_id, python_code, timeout=600)
+
+    # メモ：
+    # cohort.npzが巨大すぎて、そもそもOut Of Memoryになることが判明した
+    # 色々工夫しつつ処理を行うことにしたが、システムが不安定になることが判明した
+    # そのため、例外的にこのタスクだけ処理を確定させることとした
+    # 
+    # もしも、今後リアルタイム性を重視する流れになるのであれば、以下の構成に組み直す必要がある
+    # ・NPZファイル(圧縮可)を、一つあたり200MB程度の大きさになるように分割
+    # ・分割されたファイルに対して処理を行う形に運用形態を変更する
+    # 
+    # npz_cohort = await poolClient.execute_dynamic_session(user_id, session_id, "await npz_cohort",  timeout=600)
 
     # For Debug
     # npz_cohort  = await poolClient.execute_dynamic_session(user_id, session_id, "await npz_cohort",  timeout=600)

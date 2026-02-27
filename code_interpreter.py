@@ -12,7 +12,7 @@ class CodeInterpreter:
 
         # httpxクライアントが未初期化の場合
         if self.http_client is None:
-            limits           = httpx.Limits(max_keepalive_connections=20, max_connections=100)
+            limits           = httpx.Limits(max_keepalive_connections=40, max_connections=100)
             timeout          = httpx.Timeout(60.0, connect=5.0)
             self.http_client = httpx.AsyncClient(limits=limits, timeout=timeout)
         
