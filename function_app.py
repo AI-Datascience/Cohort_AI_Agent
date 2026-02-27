@@ -119,11 +119,10 @@ async def LPInsightGenerator(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
         # 例
-        # {"user_id": "001", "lp_url": "https://lp.br-lb.com/"}
+        # {"lp_url": "https://lp.br-lb.com/"}
 
         # リクエストをパースする
         req_body  = req.get_json()
-        user_id   = req_body.get('user_id', None)
         lp_url    = req_body.get('lp_url',  None)
 
 
@@ -132,7 +131,6 @@ async def LPInsightGenerator(req: func.HttpRequest) -> func.HttpResponse:
 
         response_payload = {
             "status"  : "success",
-            "user_id" : user_id,
             "data"    : result,
         }
         response_body = json.dumps(response_payload, ensure_ascii=False)
