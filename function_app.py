@@ -24,6 +24,9 @@ DYNAMICSESSIONS_ENDPOINT  = os.environ.get("DYNAMICSESSIONS_ENDPOINT")
 STORAGE_CONNECTION_STRING = os.environ.get("STORAGE_CONNECTION_STRING")
 STORAGE_CONTAINER_NAME    = os.environ.get("STORAGE_CONTAINER_NAME")
 COHORT_NPZ_SAS_URL        = os.environ.get("COHORT_NPZ_SAS_URL")
+DATABRICKS_INSTANCE       = os.environ.get("DATABRICKS_INSTANCE")
+DATABRICKS_TOKEN          = os.environ.get("DATABRICKS_TOKEN")
+DATABRICKS_JOB_ID         = os.environ.get("DATABRICKS_JOB_ID")
 LLM_MAX_TOKENS            = os.environ.get("LLM_MAX_TOKENS")
 LLM_TEMPERATURE           = os.environ.get("LLM_TEMPERATURE")
 LLM_TOP_P                 = os.environ.get("LLM_TOP_P")
@@ -124,6 +127,19 @@ async def LPInsightGenerator(req: func.HttpRequest) -> func.HttpResponse:
         # リクエストをパースする
         req_body  = req.get_json()
         lp_url    = req_body.get('lp_url',  None)
+
+        # Databricks への JobKick
+        api_url = f"https://{DATABRICKS_INSTANCE.rstrip('/')}/api/2.1/jobs/run-now"
+        headers = {
+            "Authorization"  : f"Bearer {DATABRICKS_TOKEN}",
+            "Content-Type"   : "application/json"
+        }
+        payload = {
+            "job_id"         : DATABRICKS_JOB_ID,
+            "job_parameters" : {"LANDING_PAGE_URL": lp_url}
+        }
+        response = await http_client.post(api_url, headers=headers, json=payload)
+        response.raise_for_status()
 
 
         # LPのWEBデータをもとに商品シーンを生成
