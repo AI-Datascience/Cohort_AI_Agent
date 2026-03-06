@@ -32,6 +32,8 @@ class LlmAgent:
         return parsed_data
     
     async def complete(self, prompts:List):
+        # レスポンス速度重視のため
+        # 軽量なLLMを利用することとした(MAX_TOKENS・TEMPERATURE・TOP_P等のオプション対応不可なモデル)
         response = await self.llm.chat.completions.create(
                                 model=self.model_name,
                                 messages=prompts

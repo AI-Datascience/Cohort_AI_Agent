@@ -9,8 +9,8 @@ from openai   import OpenAI, AsyncOpenAI
 import azure.functions as func
 from azure.ai.inference.models import SystemMessage, UserMessage
 
-from url_scraper      import URLScraper
-from llm_agent        import LlmAgent
+from url_scraper import URLScraper
+from llm_agent   import LlmAgent
 
 
 # .env ファイルを読み込む
@@ -20,17 +20,12 @@ load_dotenv()
 AI_FOUNDRY_ENDPOINT       = os.environ.get("AI_FOUNDRY_ENDPOINT")
 AI_FOUNDRY_API_KEY        = os.environ.get("AI_FOUNDRY_API_KEY")
 AI_FOUNDRY_MODEL          = os.environ.get("AI_FOUNDRY_MODEL")
-DYNAMICSESSIONS_ENDPOINT  = os.environ.get("DYNAMICSESSIONS_ENDPOINT")
-STORAGE_CONNECTION_STRING = os.environ.get("STORAGE_CONNECTION_STRING")
-STORAGE_CONTAINER_NAME    = os.environ.get("STORAGE_CONTAINER_NAME")
-COHORT_NPZ_SAS_URL        = os.environ.get("COHORT_NPZ_SAS_URL")
 DATABRICKS_INSTANCE       = os.environ.get("DATABRICKS_INSTANCE")
 DATABRICKS_TOKEN          = os.environ.get("DATABRICKS_TOKEN")
 DATABRICKS_JOB_ID         = os.environ.get("DATABRICKS_JOB_ID")
 LLM_MAX_TOKENS            = os.environ.get("LLM_MAX_TOKENS")
 LLM_TEMPERATURE           = os.environ.get("LLM_TEMPERATURE")
 LLM_TOP_P                 = os.environ.get("LLM_TOP_P")
-MAX_ADID_NUMBER           = os.environ.get("MAX_ADID_NUMBER")
 
 # メモ：
 # ユーザーからの要求ごとにhttpxクライアントを作成すると「SNATポート枯渇」が発生する
@@ -129,25 +124,26 @@ async def LPInsightGenerator(req: func.HttpRequest) -> func.HttpResponse:
         lp_url    = req_body.get('lp_url',  None)
 
         # Databricks への JobKick
-        api_url = f"https://{DATABRICKS_INSTANCE.rstrip('/')}/api/2.1/jobs/run-now"
-        headers = {
-            "Authorization"  : f"Bearer {DATABRICKS_TOKEN}",
-            "Content-Type"   : "application/json"
-        }
-        payload = {
-            "job_id"         : DATABRICKS_JOB_ID,
-            "job_parameters" : {"LANDING_PAGE_URL": lp_url}
-        }
-        response = await http_client.post(api_url, headers=headers, json=payload)
-        response.raise_for_status()
-
-
+        api_url       = f"https://{DATABRICKS_INSTANCE.rstrip('/')}/api/2.1/jobs/run-now"
+        headers       = {
+                            "Authorization"  : f"Bearer {DATABRICKS_TOKEN}",
+                            "Content-Type"   : "application/json"
+                        }
+        payload       = {
+                            "job_id"         : DATABRICKS_JOB_ID,
+                            "job_parameters" : {"LANDING_PAGE_URL": lp_url}
+                        }
+        task_job      = asyncio.create_task(http_client.post(api_url, headers=headers, json=payload))
         # LPのWEBデータをもとに商品シーンを生成
-        result = await get_analysis_data(lp_url)
+        task_scenario = asyncio.create_task(get_analysis_data(lp_url))
+        # タスクの完了を待つ
+        results       = await asyncio.gather(task_job, task_scenario)
 
+        # 終了処理
+        results[0].raise_for_status()
         response_payload = {
             "status"  : "success",
-            "data"    : result,
+            "data"    : results[1],
         }
         response_body = json.dumps(response_payload, ensure_ascii=False)
 
