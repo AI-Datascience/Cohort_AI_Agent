@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>大規模行動データにおけるオンメモリ疎行列演算を用いたADID抽出アーキテクチャ設計書 White Paper</title>
+    <style>
+        body {
+            font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 40px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: #fff;
+            padding: 60px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            border-radius: 8px;
+        }
+        h1 {
+            font-size: 28px;
+            border-bottom: 3px solid #003366;
+            padding-bottom: 15px;
+            margin-bottom: 30px;
+            color: #003366;
+        }
+        h2 {
+            font-size: 22px;
+            color: #004488;
+            margin-top: 50px;
+            margin-bottom: 20px;
+            border-left: 5px solid #004488;
+            padding-left: 15px;
+            background-color: #f0f4f8;
+            padding-top: 8px;
+            padding-bottom: 8px;
+        }
+        h3 {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            margin-top: 30px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+        p {
+            margin-bottom: 15px;
+            text-align: justify;
+        }
+        ul, ol {
+            margin-bottom: 20px;
+            padding-left: 20px;
+        }
+        li {
+            margin-bottom: 8px;
+        }
+        pre {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #cccccc;
+            padding: 20px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: Consolas, Monaco, "Andale Mono", monospace;
+            font-size: 13px;
+            line-height: 1.4;
+            margin: 20px 0;
+            white-space: pre; 
+        }
+        code {
+            font-family: Consolas, Monaco, "Andale Mono", monospace;
+        }
+        .inline-code {
+            background-color: #f4f4f4;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-family: monospace;
+            color: #d63384;
+        }
+        .diagram {
+            border: 1px solid #ddd;
+            background-color: #fafafa;
+            padding: 20px;
+            text-align: center;
+            font-family: monospace;
+            white-space: pre;
+            overflow-x: auto;
+            margin: 25px 0;
+            border-radius: 5px;
+            color: #444;
+            font-size: 12px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 25px 0;
+            font-size: 0.95em;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px 15px;
+            text-align: left;
+        }
+        th {
+            background-color: #f9f9f9;
+            font-weight: bold;
+            color: #333;
+        }
+        .footer {
+            margin-top: 60px;
+            font-size: 12px;
+            color: #888;
+            text-align: center;
+            border-top: 1px solid #eee;
+            padding-top: 20px;
+        }
+        .math {
+            font-style: italic;
+            font-family: "Times New Roman", serif;
+        }
+        .highlight-box {
+            background-color: #e6fffa;
+            border-left: 4px solid #00b894;
+            padding: 15px;
+            margin: 20px 0;
+            font-size: 0.95em;
+        }
+        .alert-box {
+            background-color: #fff5f5;
+            border-left: 4px solid #ff7675;
+            padding: 15px;
+            margin: 20px 0;
+            font-size: 0.95em;
+        }
+        .warning-box {
+            background-color: #fff8e1;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            font-size: 0.95em;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div style="text-align: center; margin-bottom: 60px;">
+        <div style="font-size: 14px; color: #666; letter-spacing: 2px; text-transform: uppercase;">Technical Architecture Design</div>
+        <h1 style="border:none; margin-bottom: 10px;">大規模行動データにおけるオンメモリ疎行列演算を用いた<br>ADID抽出アーキテクチャ設計書</h1>
+        <div style="font-size: 15px; color: #555;">Version 2.1 | Scalability Update (10M to 100M)</div>
+    </div>
+
+    <h2>1. 目的とスコープ</h2>
+    <p>
+        本ドキュメントは、<strong>1,000万件（10M）規模のユニークユーザー（ADID）</strong>に対し、2,000次元の行動特徴ベクトルを用いてリアルタイムに近い速度（サブセカンド）でマッチングを行うためのシステムアーキテクチャを定義する。<br>
+        データソースとしてAzure環境（Delta Lake / Blob Storage）を前提とし、I/Oボトルネックを排除した<strong>「オンメモリ疎行列演算モデル」</strong>を採用する。
+    </p>
+
+    <h2>2. 全体アーキテクチャ図</h2>
+    <p>
+        レイテンシを最小化するため、「データ生成（ETL）」と「推論（Inference）」を完全に分離する。推論サーバーは起動時に軽量化された行列データをRAMにロードし、リクエスト時には外部ストレージへのアクセスを一切行わない。
+    </p>
+
+    <div class="diagram">
++-------------------------------------------------------+       +-------------------------+
+|   Data Lake Layer (Azure Storage)                     |       |   Inference Layer (API) |
+|                                                       |       |                         |
+|  [Delta Lake (Gold)]       [Blob Storage]             |       |  [API Server Instance]  |
+|   +---------------+         +-------------------+     |       |   +-----------------+   |
+|   | Action Logs   |         | Optimized Matrix  |     |       |   |   RAM (Memory)  |   |
+|   | (Parquet/Delta)|------->| (.npz file)       |------------>|   | [Sparse Matrix] |   |
+|   | 10M x 2000    |   (A)   | Compressed ~2GB   |     |  (B)  |   |   10M x 2000    |   |
+|   +---------------+  Batch  +-------------------+     | Load  |   +-----------------+   |
+|          ^          Convert                           |  at   |            ^            |
+|          |                                            | Start |            | (C) Calc   |
++----------|--------------------------------------------+       |            v            |
+           |                                                    |      [Input Vector]     |
+    Daily Updates                                               +-------------------------+
+    (Data Eng.)                                                          ^
+                                                                         | User Req
+                                                                    [Context Analysis]
+    </div>
+
+    <h3>データフロー詳細</h3>
+    <ul>
+        <li><strong>(A) Batch Optimization:</strong> 日次バッチ等でDelta Lakeからデータを抽出し、推論に不要なメタデータを削除。Pythonの <span class="inline-code">scipy.sparse</span> 形式（.npz）に圧縮変換してBlobに配置する。</li>
+        <li><strong>(B) Cold Start Loading:</strong> APIサーバーは起動時（またはデプロイ時）にBlobから .npz ファイルをダウンロードし、メモリ空間（RAM）に展開する。</li>
+        <li><strong>(C) On-Memory Calculation:</strong> APIリクエスト時は、メモリ内の行列に対して演算を行うため、ディスクI/Oが発生しない。</li>
+    </ul>
+
+    <h2>3. パフォーマンス要件とサイジング</h2>
+
+    <h3>3.1 メモリ要件の試算 (1,000万ADID)</h3>
+    <p>
+        行動データは「多くのユーザーは、2,000箇所のうち数箇所しか訪問しない」という特性を持つため、<strong>疎行列（Sparse Matrix）</strong>として扱うことでメモリ消費を劇的に削減する。
+    </p>
+    <div class="highlight-box">
+        <strong>前提条件:</strong>
+        <ul>
+            <li>ユーザー数: 10,000,000 ADID</li>
+            <li>次元数（場所数）: 2,000</li>
+            <li>平均訪問箇所数: 20箇所/User（Sparsity 99%）</li>
+        </ul>
+        <strong>計算式:</strong><br>
+        データサイズ ≈ 非ゼロ要素数 × (値4byte + インデックス4byte)<br>
+        = (10M × 20) × 8 bytes ≈ <strong>1.6 GB</strong>
+    </div>
+    <p>
+        <strong>結論:</strong> 1.6GB〜2.0GB程度のメモリ消費であり、Azure App Service (P1v2以上: 3.5GB RAM) やStandardなコンテナインスタンスで十分にオンメモリ処理が可能である。
+    </p>
+
+    <h3>3.2 レスポンスタイム予測</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>処理フェーズ</th>
+                <th>方式</th>
+                <th>推定所要時間</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>データロード</td>
+                <td>RDBMS/Parquet直接参照</td>
+                <td>数秒 〜 数十秒 (NG)</td>
+            </tr>
+            <tr>
+                <td><strong>データロード</strong></td>
+                <td><strong>オンメモリ (本構成)</strong></td>
+                <td><strong>0 ms (常駐)</strong></td>
+            </tr>
+            <tr>
+                <td>行列演算</td>
+                <td>Dense (密行列)</td>
+                <td>200〜500 ms</td>
+            </tr>
+            <tr>
+                <td><strong>行列演算</strong></td>
+                <td><strong>Sparse (疎行列・本構成)</strong></td>
+                <td><strong>10〜50 ms</strong></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>4. 実装仕様：疎行列化とロード処理</h2>
+
+    <h3>4.1 前処理（Batch Phase: Azure Databricks / Synapse）</h3>
+    <p>Delta Lakeから読み出し、APIサーバーが読み込みやすい形式へ変換する。</p>
+<pre><code>import scipy.sparse as sp
+import numpy as np
+
+def convert_delta_to_sparse(spark_df):
+    """
+    Delta LakeのDataFrame(ADID, LocationID, Score)を
+    CSR形式の疎行列に変換し、保存する
+    """
+    # 1. Pandasへ変換 (分散処理後のCollect)
+    pdf = spark_df.select("user_idx", "loc_idx", "score").toPandas()
+    
+    # 2. 疎行列(CSR)の構築
+    # rows: user_idx, cols: loc_idx, data: score
+    user_count = 10_000_000
+    dim_count = 2_000
+    
+    sparse_matrix = sp.csr_matrix(
+        (pdf['score'], (pdf['user_idx'], pdf['loc_idx'])),
+        shape=(user_count, dim_count),
+        dtype=np.float32
+    )
+    
+    # 3. 軽量ファイルとして保存
+    sp.save_npz("/dbfs/mnt/blob_export/user_behavior_matrix.npz", sparse_matrix)
+    
+    # ※別途、user_idxとADIDの対応表も保存が必要
+</code></pre>
+
+    <h3>4.2 推論処理（API Phase: FastAPI / Flask）</h3>
+    <p>サーバー起動時にデータをロードし、リクエストを高速処理する。</p>
+<pre><code>import scipy.sparse as sp
+import numpy as np
+
+class VectorEngine:
+    def __init__(self, model_path):
+        print("--- System Boot: Loading Matrix into RAM ---")
+        # ディスク(BlobからDL済み)からメモリへロード
+        # 1000万件でも数秒でロード完了
+        self.user_matrix = sp.load_npz(model_path) 
+        print(f"Loaded Matrix Shape: {self.user_matrix.shape}")
+
+    def search(self, location_scores_vector, top_k=100):
+        """
+        Input: location_scores_vector (1 x 2000) - 商品と場所の関連度
+        Output: Top K User Indices
+        """
+        # [高速演算] 疎行列(10M x 2000) と ベクトル(2000 x 1) の積
+        # user_scores は (10M x 1) のベクトルになる
+        user_scores = self.user_matrix.dot(location_scores_vector.T)
+
+        # 上位K件のインデックスを取得 (Dense化せずにArgpartition等で高速化推奨)
+        # ここでは簡易的にDense化してSort
+        scores_dense = user_scores.toarray().flatten()
+        top_indices = np.argsort(scores_dense)[-top_k:][::-1]
+        
+        return top_indices, scores_dense[top_indices]
+</code></pre>
+
+    <h2>5. 運用設計（Update Strategy）</h2>
+    <div class="alert-box">
+        <strong>課題:</strong> データがメモリに常駐するため、行動データの更新時にはAPIサーバーのメモリ内容を入れ替える必要がある。
+    </div>
+    <p>
+        <strong>解決策: Blue/Green デプロイメント</strong><br>
+        行動データが更新（例：毎朝6時）された際、以下の手順で無停止更新を行う。
+    </p>
+    <ol>
+        <li>バッチ処理で新しい <code>.npz</code> ファイルをBlobに生成。</li>
+        <li>新しいAPIインスタンス群（Green環境）を起動。起動スクリプトで最新の <code>.npz</code> をロード。</li>
+        <li>ヘルスチェック（行列ロード完了）を確認後、ロードバランサーの向き先をBlueからGreenへ切り替え。</li>
+        <li>旧インスタンス（Blue）を破棄。</li>
+    </ol>
+
+    <h2>7. 拡張（レコード数のスケールアップに対しての備考）</h2>
+    <p>
+        将来的にデータ規模が<strong>1億レコード（100M ADID）</strong>へ拡大した場合のパフォーマンス予測と、推奨される対応策について記述する。
+    </p>
+
+    <h3>7.1 線形スケーリングとレイテンシの壁</h3>
+    <p>
+        本アーキテクチャ（疎行列演算）の計算量は、非ゼロ要素数（NNZ）に対して線形に増加する。したがって、レコード数が10倍になれば、理論上のCPU演算時間も10倍となる。
+    </p>
+    <ul>
+        <li>10M規模: 約 0.05 〜 0.1 秒</li>
+        <li><strong>100M規模: 約 0.5 〜 1.0 秒</strong></li>
+    </ul>
+    <div class="warning-box">
+        <strong>評価:</strong> 計算時間は線形増加するが、Web/広告配信における「リアルタイム性（200ms以内）」の要件を満たせなくなるリスクが高い。
+    </div>
+
+    <h3>7.2 メモリ帯域（Memory Bandwidth）のボトルネック</h3>
+    <p>
+        100Mレコードの場合、オンメモリデータサイズは約16GBに達する。現代のCPU演算速度は非常に高速だが、メモリからCPUへのデータ転送速度（Bandwidth）が物理的な限界を迎える。
+    </p>
+    <ul>
+        <li>一般的なサーバーのメモリ帯域: 50GB/s 〜 100GB/s</li>
+        <li>1リクエストあたりのスキャン量: 16GB</li>
+        <li><strong>転送時間: 16GB ÷ 50GB/s = 0.32秒（計算処理以前のオーバーヘッド）</strong></li>
+    </ul>
+    <p>
+        これにより、同時アクセス（Concurrency）が発生した際、CPU使用率に余裕があってもメモリ転送待ちが発生し、スループットが劇的に低下する可能性がある。単一サーバーでの垂直スケール（Scale-up）には限界がある。
+    </p>
+
+    <h3>7.3 推奨ソリューション：シャーディング（分散処理）</h3>
+    <p>
+        100M規模で 0.1秒以下のレスポンスを維持するためには、データを分割し並列処理を行う<strong>シャーディング（水平分割）</strong>が必要となる。
+    </p>
+    <div class="diagram">
+[API Gateway]
+    |
+    +---> [Shard 1 (User 00M-10M)] -> 計算 0.1s
+    |
+    +---> [Shard 2 (User 10M-20M)] -> 計算 0.1s
+    |       ...
+    +---> [Shard 10 (User 90M-100M)] -> 計算 0.1s
+    |
+    (Gather) -> Top-K Merge -> Response (Total ~0.15s)
+    </div>
+    <p>
+        あるいは、この規模に達した段階で、専用の<strong>ベクトル検索エンジン（Qdrant, Milvus等）</strong>のクラスタ構成への移行を検討することを推奨する。
+    </p>
+
+    <h2>8. 結論</h2>
+    <p>
+        ADID 1,000万件規模へのスケールアップに対し、<strong>「ストレージ（Delta Lake）」と「計算リソース（On-Memory API）」を分離するアーキテクチャ</strong>を採用することで、以下のメリットを享受できる。
+    </p>
+    <ul>
+        <li><strong>超低遅延:</strong> I/Oを排除し、マッチング処理を 100ms 未満に抑えることが確実。</li>
+        <li><strong>コスト効率:</strong> 疎行列化により、巨大なメモリサーバーを必要とせず、汎用的なインスタンスで稼働可能。</li>
+        <li><strong>データ整合性:</strong> Azure Delta Lake を信頼できる唯一の情報源（SSOT）として維持可能。</li>
+    </ul>
+
+    <div class="footer">
+        Author：Kunio Arakawa, Architecture Design Document v2.1<br>
+        Matching Engine Development Team
+    </div>
+</div>
+
+</body>
+</html>
