@@ -20,7 +20,6 @@ from src.plugins.now_datetime     import NowDateTimePlugin
 from src.plugins.web_search       import WebSearchPlugin
 from src.plugins.web_summary      import WebSummaryPlugin
 from src.plugins.fetch_url        import FetchUrl
-# from src.plugins.code_interpreter import CodeInterpreterPlugin
 from url_scraper import URLScraper
 
 
@@ -28,15 +27,21 @@ from url_scraper import URLScraper
 load_dotenv()
 
 # 環境変数の取得
-AI_FOUNDRY_ENDPOINT       = os.environ.get("AI_FOUNDRY_ENDPOINT")
-AI_FOUNDRY_API_KEY        = os.environ.get("AI_FOUNDRY_API_KEY")
-AI_FOUNDRY_MODEL          = os.environ.get("AI_FOUNDRY_MODEL")
-DATABRICKS_INSTANCE       = os.environ.get("DATABRICKS_INSTANCE")
-DATABRICKS_TOKEN          = os.environ.get("DATABRICKS_TOKEN")
-DATABRICKS_JOB_ID         = os.environ.get("DATABRICKS_JOB_ID")
-LLM_MAX_TOKENS            = os.environ.get("LLM_MAX_TOKENS")
-LLM_TEMPERATURE           = os.environ.get("LLM_TEMPERATURE")
-LLM_TOP_P                 = os.environ.get("LLM_TOP_P")
+AI_FOUNDRY_ENDPOINT_LIGHT  = os.environ.get("AI_FOUNDRY_ENDPOINT_LIGHT")
+AI_FOUNDRY_API_KEY_LIGHT   = os.environ.get("AI_FOUNDRY_API_KEY_LIGHT")
+AI_FOUNDRY_MODEL_LIGHT     = os.environ.get("AI_FOUNDRY_MODEL_LIGHT")
+AI_FOUNDRY_ENDPOINT_NORMAL = os.environ.get("AI_FOUNDRY_ENDPOINT_NORMAL")
+AI_FOUNDRY_API_KEY_NORMAL  = os.environ.get("AI_FOUNDRY_API_KEY_NORMAL")
+AI_FOUNDRY_MODEL_NORMAL    = os.environ.get("AI_FOUNDRY_MODEL_NORMAL")
+AI_FOUNDRY_ENDPOINT_HEAVY  = os.environ.get("AI_FOUNDRY_ENDPOINT_HEAVY")
+AI_FOUNDRY_API_KEY_HEAVY   = os.environ.get("AI_FOUNDRY_API_KEY_HEAVY")
+AI_FOUNDRY_MODEL_HEAVY     = os.environ.get("AI_FOUNDRY_MODEL_HEAVY")
+DATABRICKS_INSTANCE        = os.environ.get("DATABRICKS_INSTANCE")
+DATABRICKS_TOKEN           = os.environ.get("DATABRICKS_TOKEN")
+DATABRICKS_JOB_ID          = os.environ.get("DATABRICKS_JOB_ID")
+LLM_MAX_TOKENS             = os.environ.get("LLM_MAX_TOKENS")
+LLM_TEMPERATURE            = os.environ.get("LLM_TEMPERATURE")
+LLM_TOP_P                  = os.environ.get("LLM_TOP_P")
 # 現在はDataBaseまでは必要ない
 # MONGODB_CONNECTION_STRING = os.environ.get("MONGODB_CONNECTION_STRING")
 # DB_NAME                   = os.environ.get("DB_NAME")
@@ -62,20 +67,37 @@ http_client  = httpx.AsyncClient(limits=limits, timeout=timeout)
 
 # 関数アプリのセットアップ
 app          = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+
+# メモ：
+# 営業との話し合いの結果、結局速度は重要らしい
+# しかし、処理内容的に速度が必要ないものも含まれている
+# 様々な案件に対するそれぞれの要求があるが、もはや一つのLLMでは網羅不可能である
+# そこで、案件毎に必要なモデルを簡単に切り替えられるようにしておくこととした
+# 
+# LLMクライアントのセットアップ(Light)
+llmClient_light = BasicClient(AI_FOUNDRY_MODEL_LIGHT, max_tokens=int(LLM_MAX_TOKENS), temperature=float(LLM_TEMPERATURE), top_p=float(LLM_TOP_P))
+llmClient_light.configure(AI_FOUNDRY_ENDPOINT_LIGHT, AI_FOUNDRY_API_KEY_LIGHT, http_client)
 # LLMクライアントのセットアップ(Normal)
-llmClient    = BasicClient(AI_FOUNDRY_MODEL, max_tokens=int(LLM_MAX_TOKENS), temperature=float(LLM_TEMPERATURE), top_p=float(LLM_TOP_P))
-llmClient.configure(AI_FOUNDRY_ENDPOINT, AI_FOUNDRY_API_KEY, http_client)
+llmClient_normal = BasicClient(AI_FOUNDRY_MODEL_NORMAL, max_tokens=int(LLM_MAX_TOKENS), temperature=float(LLM_TEMPERATURE), top_p=float(LLM_TOP_P))
+llmClient_normal.configure(AI_FOUNDRY_ENDPOINT_NORMAL, AI_FOUNDRY_API_KEY_NORMAL, http_client)
+# LLMクライアントのセットアップ(Heavy)
+llmClient_heavy = BasicClient(AI_FOUNDRY_MODEL_HEAVY, max_tokens=int(LLM_MAX_TOKENS), temperature=float(LLM_TEMPERATURE), top_p=float(LLM_TOP_P))
+llmClient_heavy.configure(AI_FOUNDRY_ENDPOINT_HEAVY, AI_FOUNDRY_API_KEY_HEAVY, http_client)
 # ツールのセットアップ
 semaphore    = asyncio.Semaphore(10)
 fetchUrl     = FetchUrl(2000, semaphore, http_client)
-llmClient.register(NowDateTimePlugin())
-llmClient.register(WebSummaryPlugin(2000, semaphore, http_client))
-llmClient.register(WebSearchPlugin( 2000, semaphore, http_client))
-llmClient.register(fetchUrl)
+llmClient_normal.register(NowDateTimePlugin())
+llmClient_normal.register(WebSummaryPlugin(2000, semaphore, http_client))
+llmClient_normal.register(WebSearchPlugin( 2000, semaphore, http_client))
+llmClient_normal.register(fetchUrl)
+llmClient_heavy.register(NowDateTimePlugin())
+llmClient_heavy.register(WebSummaryPlugin(2000, semaphore, http_client))
+llmClient_heavy.register(WebSearchPlugin( 2000, semaphore, http_client))
+llmClient_heavy.register(fetchUrl)
 # MongoDBのセットアップ
 # mongoStorage = MongoWrapper(MONGODB_CONNECTION_STRING, DB_NAME, COLLECTION_NAME)
 
-async def generate_report(project:str, user_id:str, chat_id:str, promptFile:str, words:list|str):
+async def generate_report(project:str, user_id:str, chat_id:str, llmClient:BasicClient, promptFile:str, words:list|str):
     if isinstance(words, str):
         words = [words]
     
@@ -188,7 +210,7 @@ def get_llm_prompt(lp_string:dict):
     messages.append(UserMessage(content=lp_string))
     return messages
 
-async def get_analysis_data(lp_url:str):
+async def get_analysis_data(llmClient:BasicClient, lp_url:str):
     # LPのWEBデータ取得
     lp_string       = await fetchUrl.execute(lp_url)
     # 商品シーン・ペルソナ・訴求シナリオを生成
@@ -224,14 +246,24 @@ async def LPInsightGenerator(req: func.HttpRequest) -> func.HttpResponse:
         user_id = str(uuid.uuid4())
         chat_id = str(uuid.uuid4())
 
+        # 動作モードによるモデルの切り替え
+        if   mode.lower() == 'light':
+            use_model = llmClient_light
+        elif mode.lower() == 'normal':
+            use_model = llmClient_normal
+        elif mode.lower() == 'heavy':
+            use_model = llmClient_normal
+        else:
+            use_model = llmClient_light
+
         # 動作モードが普通or処理重視
-        if mode in {"normal", "heavy"}:
+        if mode.lower() in {"normal", "heavy"}:
             if isinstance(words, str):
                 words = [words]
             
             # 解析対象単語について指定のある場合
             if len(words) != 0:
-                task_analysis = asyncio.create_task(generate_report(project, user_id, chat_id, '商品分析.md', words))
+                task_analysis = asyncio.create_task(generate_report(project, user_id, chat_id, use_model, '商品分析.md', words))
             else:
                 task_analysis = None
         else:
@@ -240,7 +272,7 @@ async def LPInsightGenerator(req: func.HttpRequest) -> func.HttpResponse:
         # Databricks への JobKick
         task_job      = asyncio.create_task(job_kick(task_analysis, project, lp_url))
         # LPのWEBデータをもとに商品シーンを生成
-        task_scenario = asyncio.create_task(get_analysis_data(lp_url))
+        task_scenario = asyncio.create_task(get_analysis_data(use_model, lp_url))
         # タスクの完了を待つ
         results       = await asyncio.gather(task_job, task_scenario)
 

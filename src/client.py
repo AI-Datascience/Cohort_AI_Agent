@@ -4,7 +4,7 @@ import asyncio
 from typing  import List, Dict
 from logging import Logger, getLogger
 from httpx   import AsyncClient
-from openai  import OpenAI, AsyncOpenAI
+from openai  import OpenAI, AsyncOpenAI, _types
 from azure.ai.inference.models import ChatResponseMessage
 from azure.ai.inference.models import ToolMessage
 
@@ -12,8 +12,9 @@ from .core._interface    import AIgentClient
 from .plugins._interface import AgentPlugin
 
 class BasicClient(AIgentClient):
-    def __init__(self, AI_FOUNDRY_MODEL:str, max_tokens:int|None=None, temperature:float|None=None, top_p:float|None=None, logger:Logger=getLogger(__name__)):
+    def __init__(self, MODE:str, AI_FOUNDRY_MODEL:str, max_tokens:int|None=None, temperature:float|None=None, top_p:float|None=None, logger:Logger=getLogger(__name__)):
         super().__init__()
+        self.MODE                           = MODE
         self.AI_FOUNDRY_MODEL               = AI_FOUNDRY_MODEL
         self.max_tokens                     = max_tokens
         self.temperature                    = temperature
@@ -66,9 +67,10 @@ class BasicClient(AIgentClient):
         # 一定以上の深さまでしか対応しない
         # マルチステップ実行
         if depth > 0:
+            use_tools  = tools if len(tools) == 0 else _types.omit
             response   = await self.llm.chat.completions.create(
                 messages=messages,
-                tools=tools,
+                tools=use_tools,
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
                 top_p=self.top_p,
@@ -123,17 +125,43 @@ class BasicClient(AIgentClient):
         return final_content
 
     async def complete(self, messages:List, tools:List|None=None) -> str:
-        response  = await self.llm.chat.completions.create(
-            messages=messages,
-            tools=tools,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            model=self.AI_FOUNDRY_MODEL
-        )
-        if response.choices[0].message.tool_calls is not None:
-             self.logger.info(f"call tools: {response.choices[0].message.tool_calls}")
-             response = await self.use_tools(3, messages, tools, response.choices[0].message)
+        if   self.MODE.lower() == 'light':
+            tmp_mode = 'light'
+        elif self.MODE.lower() == 'normal':
+            tmp_mode = 'normal'
+        elif self.MODE.lower() == 'heavy':
+            tmp_mode = 'heavy'
+        else:
+            tmp_mode = 'light'
+
+        if tmp_mode in {'normal', 'heavy'}:
+            # ツール使用許可有り
+            use_tools = tools if len(tools) == 0 else _types.omit
+            response  = await self.llm.chat.completions.create(
+                messages=messages,
+                tools=use_tools,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                model=self.AI_FOUNDRY_MODEL
+            )
+            if response.choices[0].message.tool_calls is not None:
+                self.logger.info(f"call tools: {response.choices[0].message.tool_calls}")
+
+                # マルチステップ実行
+                if tmp_mode == 'normal':
+                    response = await self.use_tools(1, messages, tools, response.choices[0].message)
+                else:
+                    response = await self.use_tools(4, messages, tools, response.choices[0].message)
+        else:
+            # ツール使用許可無し
+            response  = await self.llm.chat.completions.create(
+                messages=messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                model=self.AI_FOUNDRY_MODEL
+            )
 
         reply_content = response.choices[0].message.content
         reply_text    = self.content2text(reply_content)
