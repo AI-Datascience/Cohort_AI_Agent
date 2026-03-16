@@ -20,7 +20,6 @@ from src.plugins.now_datetime     import NowDateTimePlugin
 from src.plugins.web_search       import WebSearchPlugin
 from src.plugins.web_summary      import WebSummaryPlugin
 from src.plugins.fetch_url        import FetchUrl
-from url_scraper import URLScraper
 
 
 # .env ファイルを読み込む
@@ -75,13 +74,13 @@ app          = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 # そこで、案件毎に必要なモデルを簡単に切り替えられるようにしておくこととした
 # 
 # LLMクライアントのセットアップ(Light)
-llmClient_light = BasicClient(AI_FOUNDRY_MODEL_LIGHT, max_tokens=int(LLM_MAX_TOKENS), temperature=float(LLM_TEMPERATURE), top_p=float(LLM_TOP_P))
+llmClient_light = BasicClient('Light',   AI_FOUNDRY_MODEL_LIGHT, max_tokens=int(LLM_MAX_TOKENS), temperature=float(LLM_TEMPERATURE), top_p=float(LLM_TOP_P))
 llmClient_light.configure(AI_FOUNDRY_ENDPOINT_LIGHT, AI_FOUNDRY_API_KEY_LIGHT, http_client)
 # LLMクライアントのセットアップ(Normal)
-llmClient_normal = BasicClient(AI_FOUNDRY_MODEL_NORMAL, max_tokens=int(LLM_MAX_TOKENS), temperature=float(LLM_TEMPERATURE), top_p=float(LLM_TOP_P))
+llmClient_normal = BasicClient('Normal', AI_FOUNDRY_MODEL_NORMAL, max_tokens=int(LLM_MAX_TOKENS), temperature=float(LLM_TEMPERATURE), top_p=float(LLM_TOP_P))
 llmClient_normal.configure(AI_FOUNDRY_ENDPOINT_NORMAL, AI_FOUNDRY_API_KEY_NORMAL, http_client)
 # LLMクライアントのセットアップ(Heavy)
-llmClient_heavy = BasicClient(AI_FOUNDRY_MODEL_HEAVY, max_tokens=int(LLM_MAX_TOKENS), temperature=float(LLM_TEMPERATURE), top_p=float(LLM_TOP_P))
+llmClient_heavy = BasicClient('Heavy',   AI_FOUNDRY_MODEL_HEAVY, max_tokens=int(LLM_MAX_TOKENS), temperature=float(LLM_TEMPERATURE), top_p=float(LLM_TOP_P))
 llmClient_heavy.configure(AI_FOUNDRY_ENDPOINT_HEAVY, AI_FOUNDRY_API_KEY_HEAVY, http_client)
 # ツールのセットアップ
 semaphore    = asyncio.Semaphore(10)
@@ -153,12 +152,13 @@ async def job_kick(task_analysis, project:str, lp_url:str):
     payload       = {
                         "job_id"         : DATABRICKS_JOB_ID,
                         "job_parameters" : {
-                                                "PROJECT_NAME"     : project,
-                                                "LANDING_PAGE_URL" : lp_url,
-                                                "GENERATE_PATH"    : generate_path,
+                                                "PROJECT_NAME"     : project       or "",
+                                                "LANDING_PAGE_URL" : lp_url        or "",
+                                                "GENERATE_PATH"    : generate_path or "",
                                             }
                     }
-    http_client.post(api_url, headers=headers, json=payload)
+    response = await http_client.post(api_url, headers=headers, json=payload)
+    return response
 
 
 

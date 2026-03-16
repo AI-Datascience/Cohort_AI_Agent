@@ -134,7 +134,7 @@ class BasicClient(AIgentClient):
         else:
             tmp_mode = 'light'
 
-        if tmp_mode in {'normal', 'heavy'}:
+        if (tmp_mode in {'normal', 'heavy'}) and (tools is not None):
             # ツール使用許可有り
             use_tools = tools if len(tools) == 0 else _types.omit
             response  = await self.llm.chat.completions.create(
